@@ -5,6 +5,7 @@ package godb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strings"
 
@@ -41,6 +42,20 @@ type TupleDesc struct {
 // are the same length
 func (d1 *TupleDesc) equals(d2 *TupleDesc) bool {
 	// TODO: some code goes here
+	// 若 d1 和 d2 的长度不相等，则返回 false
+	length := len(d1.Fields)
+	if length != len(d2.Fields) {
+		return false
+	}
+	// 比较 d1 和 d2 的每一个字段
+	for i := 0; i < length; i++ {
+		f1 := d1.Fields[i]
+		f2 := d2.Fields[i]
+		// 若 f1 和 f2 的字段名或字段类型或表名不相等，则返回 false
+		if f1.Fname != f2.Fname || f1.Ftype != f2.Ftype || f1.TableQualifier != f2.TableQualifier {
+			return false
+		}
+	}
 	return true
 
 }
@@ -76,7 +91,11 @@ func findFieldInTd(field FieldType, desc *TupleDesc) (int, error) {
 // Look at the built-in function "copy".
 func (td *TupleDesc) copy() *TupleDesc {
 	// TODO: some code goes here
-	return &TupleDesc{} //replace me
+	// 初始化一个FieldType类型的切片
+	fields := make([]FieldType, len(td.Fields))
+	// 将 td.Fields 的内容复制到 fields 中
+	copy(fields, td.Fields)
+	return &TupleDesc{Fields: fields} //replace me
 }
 
 // Assign the TableQualifier of every field in the TupleDesc to be the
@@ -96,7 +115,15 @@ func (td *TupleDesc) setTableAlias(alias string) {
 // appended onto the fields of desc.
 func (desc *TupleDesc) merge(desc2 *TupleDesc) *TupleDesc {
 	// TODO: some code goes here
-	return &TupleDesc{}  //replace me
+	// 初始化一个FieldType类型的切片，长度为 desc.Fields 的长度加上 desc2.Fields 的长度
+	length1 := len(desc.Fields)
+	length2 := len(desc2.Fields)
+	fields := make([]FieldType, length1, length1+length2)
+	// 将 desc.Fields 的内容复制到 fields 中
+	copy(fields, desc.Fields)
+	// 将 desc2.Fields 的内容添加到 fields 中
+	fields = append(fields, desc2.Fields...)
+	return &TupleDesc{Fields: fields} //replace me
 }
 
 // ================== Tuple Methods ======================
@@ -145,6 +172,24 @@ type recordID interface {
 // tuple.
 func (t *Tuple) writeTo(b *bytes.Buffer) error {
 	// TODO: some code goes here
+	// 遍历 t.Fields，将每个字段的值写入 b 中
+	for i, field := range t.Fields {
+		// 初始化一个长度为 StringLength 的字节数组
+		data := make([]byte, StringLength)
+		// 判断数据类型
+		if t.Desc.Fields[i].Ftype == IntType {
+			// 若为 IntType，则将 int64 转换为 uint64，再将 uint64 转换为字节数组
+			binary.LittleEndian.PutUint64(data, uint64(field.(IntField).Value))
+		} else if t.Desc.Fields[i].Ftype == StringType {
+			// 若为 StringType，则将 string 转换为字节数组
+			copy(data, []byte(field.(StringField).Value))
+		}
+		// 将 data 写入 b 中
+		err := binary.Write(b, binary.LittleEndian, data)
+		if err != nil {
+			return err
+		}
+	}
 	return nil //replace me
 }
 
@@ -163,7 +208,42 @@ func (t *Tuple) writeTo(b *bytes.Buffer) error {
 // tuple.
 func readTupleFrom(b *bytes.Buffer, desc *TupleDesc) (*Tuple, error) {
 	// TODO: some code goes here
-	return nil, nil //replace me
+	length := len(desc.Fields)
+	// fields 存储每个字段的值
+	fields := make([]DBValue, length)
+	// 构造一个二维数组，用于存储读取到的byte数据，每个元素的长度为 StringLength
+	var data = make([][StringLength]byte, length)
+	// 从 b 中读取数据
+	err := binary.Read(b, binary.LittleEndian, data)
+	if err != nil {
+		return nil, err
+	}
+	// 遍历 desc.Fields，将每个字段的值存储到 fields 中
+	for i, v := range desc.Fields {
+		// 判断数据类型
+		if v.Ftype == IntType {
+			// 若为 IntType，则将字节数组转换为 uint64，再将 uint64 转换为 int64
+			var field_value IntField
+			field_value.Value = int64(binary.LittleEndian.Uint64(data[i][:]))
+			if err != nil {
+				return nil, err
+			}
+			fields[i] = field_value
+		} else if v.Ftype == StringType {
+			// 若为 StringType，则将字节数组转换为 string
+			var field_value StringField
+			// 去除字符串中的空字符
+			c := bytes.Trim(data[i][:], "\x00")
+			field_value.Value = string(c)
+			fields[i] = field_value
+		}
+	}
+	// 返回一个 Tuple 对象
+	return &Tuple{
+		Desc:   *desc.copy(),
+		Fields: fields,
+		Rid:    0,
+	}, nil //replace me
 
 }
 
@@ -173,13 +253,36 @@ func readTupleFrom(b *bytes.Buffer, desc *TupleDesc) (*Tuple, error) {
 // operators.
 func (t1 *Tuple) equals(t2 *Tuple) bool {
 	// TODO: some code goes here
+	// 先判断 t1 和 t2 的 TupleDesc 是否相等
+	if !t1.Desc.equals(&t2.Desc) {
+		return false
+	}
+	// 再判断 t1 和 t2 的 Fields 是否相等
+	// 若长度不相等，则返回 false
+	length := len(t1.Fields)
+	if length != len(t2.Fields) {
+		return false
+	}
+	// 遍历 t1 和 t2 的 Fields，比较每个字段的值
+	for i := 0; i < length; i++ {
+		if t1.Fields[i] != t2.Fields[i] {
+			return false
+		}
+	}
 	return true
 }
 
 // Merge two tuples together, producing a new tuple with the fields of t2 appended to t1.
 func joinTuples(t1 *Tuple, t2 *Tuple) *Tuple {
 	// TODO: some code goes here
-	return &Tuple{}
+	// 合并 t1 和 t2 的 TupleDesc
+	desc := t1.Desc.merge(&t2.Desc)
+	// 合并 t1 和 t2 的 Fields
+	fields := append(t1.Fields, t2.Fields...)
+	return &Tuple{
+		Desc:   *desc,
+		Fields: fields,
+	}
 }
 
 type orderByState int
@@ -203,7 +306,44 @@ const (
 // expression on the supplied tuple.
 func (t *Tuple) compareField(t2 *Tuple, field Expr) (orderByState, error) {
 	// TODO: some code goes here
-	return OrderedEqual, nil // replace me
+	// 调用 Expr.EvalExpr 方法，获取 t 和 t2 中字段的值
+	val1, err := field.EvalExpr(t)
+	if err != nil {
+		return OrderedEqual, err
+	}
+	val2, err := field.EvalExpr(t2)
+	if err != nil {
+		return OrderedEqual, err
+	}
+	// 判断字段的类型
+	typeName := field.GetExprType().Ftype
+	if typeName == IntType {
+		// 若为 IntType，则进行IntField类型的比较
+		value1 := val1.(IntField).Value
+		value2 := val2.(IntField).Value
+		if value1 < value2 {
+			return OrderedLessThan, nil
+		} else if value1 > value2 {
+			return OrderedGreaterThan, nil
+		} else {
+			return OrderedEqual, nil
+		}
+	} else if typeName == StringType {
+		// 若为 StringType，则进行StringField类型的比较
+		value1 := val1.(StringField).Value
+		value2 := val2.(StringField).Value
+		if value1 < value2 {
+			return OrderedLessThan, nil
+		} else if value1 > value2 {
+			return OrderedGreaterThan, nil
+		} else {
+			return OrderedEqual, nil
+		}
+	}
+	return OrderedEqual, GoDBError{
+		code:      0,
+		errString: "err",
+	} // replace me
 }
 
 // Project out the supplied fields from the tuple. Should return a new Tuple
@@ -214,7 +354,32 @@ func (t *Tuple) compareField(t2 *Tuple, field Expr) (orderByState, error) {
 // entry t2.name in t, but only if there is not an entry t1.name in t)
 func (t *Tuple) project(fields []FieldType) (*Tuple, error) {
 	// TODO: some code goes here
-	return nil, nil  //replace me
+	// 初始化一个 DBValue 类型的切片
+	values := make([]DBValue, len(fields))
+	// 依次获取 fields 中对应的字段的值
+	for i, v := range fields {
+		ans := -1
+		// 遍历 t.Desc.Fields，找到对应的字段
+		for j, val := range t.Desc.Fields {
+			if val.Fname == v.Fname {
+				ans = j
+				// 只有当 TableQualifier 相等时，为精准匹配
+				if val.TableQualifier == v.TableQualifier {
+					break
+				}
+			}
+		}
+		// 若未找到对应的字段，则返回错误
+		if ans == -1 {
+			return nil, GoDBError{}
+		}
+		// 将字段的值存储到 values 中
+		values[i] = t.Fields[ans]
+	}
+
+	return &Tuple{
+		Fields: values,
+	}, nil //replace me
 }
 
 // Compute a key for the tuple to be used in a map structure
