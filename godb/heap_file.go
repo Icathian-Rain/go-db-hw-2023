@@ -2,11 +2,14 @@ package godb
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/mitchellh/hashstructure/v2"
 )
 
 // HeapFile is an unordered collection of tuples Internally, it is arranged as a
@@ -18,8 +21,10 @@ type HeapFile struct {
 	// TODO: some code goes here
 	// HeapFile should include the fields below;  you may want to add
 	// additional fields
-	bufPool *BufferPool
-	sync.Mutex
+	bufPool    *BufferPool // buffer pool
+	sync.Mutex             // mutex
+	fromFile   string      // file name
+	td         *TupleDesc  // tuple descriptor
 }
 
 // Create a HeapFile.
@@ -30,13 +35,30 @@ type HeapFile struct {
 // May return an error if the file cannot be opened or created.
 func NewHeapFile(fromFile string, td *TupleDesc, bp *BufferPool) (*HeapFile, error) {
 	// TODO: some code goes here
-	return &HeapFile{}, nil //replace me
+	// 创建或打开文件
+	file, err := os.OpenFile(fromFile, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return &HeapFile{
+		fromFile: fromFile,
+		td:       td,
+		bufPool:  bp,
+	}, nil //replace me
 }
 
 // Return the number of pages in the heap file
 func (f *HeapFile) NumPages() int {
 	// TODO: some code goes here
-	return 0 //replace me
+	// 获取文件大小
+	FileInfo, err := os.Stat(f.fromFile)
+	if err != nil {
+		return 0
+	}
+	fileSize := FileInfo.Size()
+	// 计算页数
+	return int(fileSize) / PageSize //replace me
 }
 
 // Load the contents of a heap file from a specified CSV file.  Parameters are as follows:
@@ -123,7 +145,26 @@ func (f *HeapFile) LoadFromCSV(file *os.File, hasHeader bool, sep string, skipLa
 // the [heapPage.initFromBuffer] method.
 func (f *HeapFile) readPage(pageNo int) (*Page, error) {
 	// TODO: some code goes here
-	return nil, nil
+	// 打开文件
+	file, _ := os.Open(f.fromFile)
+	defer file.Close()
+	buf := make([]byte, PageSize)
+	// 计算偏移量
+	offset := PageSize * pageNo
+	// 读取文件
+	_, err := file.ReadAt(buf, int64(offset))
+	if err != nil {
+		return nil, err
+	}
+	// 根据数据库内容初始化page
+	hp := newHeapPage(f.td, pageNo, f)
+	err = hp.initFromBuffer(bytes.NewBuffer(buf))
+	if err != nil {
+		return nil, err
+	}
+	var page Page = hp
+	// 返回page
+	return &page, nil
 }
 
 // Add the tuple to the HeapFile.  This method should search through pages in
@@ -140,8 +181,36 @@ func (f *HeapFile) readPage(pageNo int) (*Page, error) {
 // add support for concurrent modifications in lab 3.
 func (f *HeapFile) insertTuple(t *Tuple, tid TransactionID) error {
 	// TODO: some code goes here
+	// 从现有的page中寻找空slot
+	for i := 0; i < f.NumPages(); i++ {
+		// 获取page
+		page, err := f.bufPool.GetPage(f, i, tid, ReadPerm)
+		if err != nil {
+			return err
+		}
+		hp := (*page).(*heapPage)
+		// 如果有空slot，插入tuple
+		if hp.getNumEmptySlots() > 0 {
+			// 插入tuple
+			_, err := (*page).(*heapPage).insertTuple(t)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	// no empty slots found, create new page
+	hp := newHeapPage(f.td, f.NumPages(), f)
+	// add tuple to new page
+	_, err := hp.insertTuple(t)
+	if err != nil {
+		return err
+	}
+	// write page to end of file
+	var page Page = hp
+	// 刷新page
+	f.flushPage(&page)
 	return nil //replace me
-
 }
 
 // Remove the provided tuple from the HeapFile.  This method should use the
@@ -153,6 +222,17 @@ func (f *HeapFile) insertTuple(t *Tuple, tid TransactionID) error {
 // heap page and slot within the page that the tuple came from.
 func (f *HeapFile) deleteTuple(t *Tuple, tid TransactionID) error {
 	// TODO: some code goes here
+	// 获取page
+	pageID := t.Rid.(RecordID).PageNo
+	page, err := f.bufPool.GetPage(f, int(pageID), tid, ReadPerm)
+	if err != nil {
+		return err
+	}
+	// 删除tuple
+	err = (*page).(*heapPage).deleteTuple(t.Rid)
+	if err != nil {
+		return err
+	}
 	return nil //replace me
 }
 
@@ -163,6 +243,23 @@ func (f *HeapFile) deleteTuple(t *Tuple, tid TransactionID) error {
 // back.
 func (f *HeapFile) flushPage(p *Page) error {
 	// TODO: some code goes here
+	// 打开文件
+	file, _ := os.OpenFile(f.fromFile, os.O_RDWR|os.O_CREATE, 0666)
+	defer file.Close()
+	pageNo := (*p).(*heapPage).pageNo
+	// 计算偏移量
+	offset := pageNo * PageSize
+	// 将page转换为buffer
+	buf, err := (*p).(*heapPage).toBuffer()
+	if err != nil {
+		return err
+	}
+	// 写入文件
+	number_bytes, err := file.WriteAt(buf.Bytes(), int64(offset))
+	if err != nil {
+		return err
+	}
+	_ = number_bytes
 	return nil //replace me
 }
 
@@ -170,8 +267,7 @@ func (f *HeapFile) flushPage(p *Page) error {
 // Supplied as argument to NewHeapFile.
 func (f *HeapFile) Descriptor() *TupleDesc {
 	// TODO: some code goes here
-	return nil //replace me
-
+	return f.td //replace me
 }
 
 // [Operator] iterator method
@@ -183,12 +279,42 @@ func (f *HeapFile) Descriptor() *TupleDesc {
 // You should esnure that Tuples returned by this method have their Rid object
 // set appropriate so that [deleteTuple] will work (see additional comments there).
 func (f *HeapFile) Iterator(tid TransactionID) (func() (*Tuple, error), error) {
-
+	// 迭代page
+	pageNo := 0
+	// page迭代tuple
+	var iter func() (*Tuple, error) = nil
 	// TODO: some code goes here
 	return func() (*Tuple, error) {
+		// 遍历page
+		for pageNo < f.NumPages() {
+			// 获取page
+			page, err := f.bufPool.GetPage(f, pageNo, tid, ReadPerm)
+			if err != nil {
+				return nil, err
+			}
+			hp := (*page).(*heapPage)
+			// 获取page的迭代器
+			if iter == nil {
+				iter = hp.tupleIter()
+			}
+			for {
+				// 获取tuple
+				t, err := iter()
+				if err != nil {
+					return nil, err
+				}
+				if t == nil {
+					// 若tuple为空，则pageNo++, iter置空
+					break
+				}
+				return t, nil
+			}
+			// 上一个页面迭代完毕
+			pageNo++
+			iter = nil
+		}
 		return nil, nil
 	}, nil
-
 }
 
 // internal strucuture to use as key for a heap page
@@ -202,8 +328,10 @@ type heapHash struct {
 // heapHash struct as the key for a page, although you can use any struct that
 // does not contain a slice or a map that uniquely identifies the page.
 func (f *HeapFile) pageKey(pgNo int) any {
-
-	// TODO: some code goes here
-	return nil
-
+	HeapHash := heapHash{
+		FileName: f.fromFile,
+		PageNo:   pgNo,
+	}
+	hash, _ := hashstructure.Hash(HeapHash, hashstructure.FormatV2, nil)
+	return hash //replace me
 }
