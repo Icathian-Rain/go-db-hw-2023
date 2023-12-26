@@ -156,6 +156,12 @@ type Tuple struct {
 type recordID interface {
 }
 
+// TODO: recordID inplement
+type RecordID struct {
+	PageNo int
+	SlotNo int
+}
+
 // Serialize the contents of the tuple into a byte array Since all tuples are of
 // fixed size, this method should simply write the fields in sequential order
 // into the supplied buffer.
@@ -186,10 +192,10 @@ func (t *Tuple) writeTo(b *bytes.Buffer) error {
 			data := make([]byte, StringLength)
 			// 若为 StringType，则将 string 转换为字节数组
 			copy(data, []byte(field.(StringField).Value))
-		// 将 data 写入 b 中
-		err := binary.Write(b, binary.LittleEndian, data)
-		if err != nil {
-			return err
+			// 将 data 写入 b 中
+			err := binary.Write(b, binary.LittleEndian, data)
+			if err != nil {
+				return err
 			}
 		} else {
 			return GoDBError{
@@ -253,7 +259,10 @@ func readTupleFrom(b *bytes.Buffer, desc *TupleDesc) (*Tuple, error) {
 	return &Tuple{
 		Desc:   *desc.copy(),
 		Fields: fields,
-		Rid:    0,
+		Rid: RecordID{
+			PageNo: -1,
+			SlotNo: -1,
+		},
 	}, nil //replace me
 
 }
