@@ -15,14 +15,14 @@ const (
 
 type BufferPool struct {
 	// TODO: some code goes here
-	pages    map[[16]byte]*Page // 用于存储页面, key为pageKey(FileName, PageNo)
-	numPages int                // BufferPool的容量
+	pages    map[uint64]*Page // 用于存储页面, key为pageKey(FileName, PageNo)
+	numPages int              // BufferPool的容量
 }
 
 // Create a new BufferPool with the specified number of pages
 func NewBufferPool(numPages int) *BufferPool {
 	// TODO: some code goes here
-	pages := make(map[[16]byte]*Page, numPages)
+	pages := make(map[uint64]*Page, numPages)
 	return &BufferPool{pages: pages, numPages: numPages}
 }
 
@@ -75,7 +75,7 @@ func (bp *BufferPool) BeginTransaction(tid TransactionID) error {
 func (bp *BufferPool) GetPage(file DBFile, pageNo int, tid TransactionID, perm RWPerm) (*Page, error) {
 	// TODO: some code goes here
 	hpfile := file.(*HeapFile)
-	key := hpfile.pageKey(pageNo).([16]byte)
+	key := hpfile.pageKey(pageNo).(uint64)
 	if bp.pages[key] != nil {
 		return bp.pages[key], nil
 	} else {
@@ -87,7 +87,7 @@ func (bp *BufferPool) GetPage(file DBFile, pageNo int, tid TransactionID, perm R
 				// 如果页面不是脏的，就可以驱逐
 				if page != nil && !(*page).isDirty() {
 					hpfile.flushPage(page)
-					delete(bp.pages, hpfile.pageKey(pageNo).([16]byte))
+					delete(bp.pages, hpfile.pageKey(pageNo).(uint64))
 					flag = true
 					break
 				}
