@@ -247,8 +247,9 @@ func (p *heapPage) tupleIter() func() (*Tuple, error) {
 		}
 		// 若index小于槽位数，则返回tuples[index]
 		if index < int(p.numSlots) {
+			t := p.tuples[index]
 			index++
-			return p.tuples[index], nil
+			return t, nil
 		}
 		return nil, nil
 	} //replace me
