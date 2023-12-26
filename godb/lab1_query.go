@@ -1,7 +1,6 @@
 package godb
 
-import (
-)
+import "os"
 
 // This function should load the csv file in fileName into a heap file (see
 // [HeapFile.LoadFromCSV]) and then compute the sum of the integer field in
@@ -14,5 +13,48 @@ import (
 // reinserted into this file unless you delete (e.g., with [os.Remove] it before
 // calling NewHeapFile.
 func computeFieldSum(fileName string, td TupleDesc, sumField string) (int, error) {
-	return 0, nil // replace me
+	// TODO: some code goes here
+	// 打开数据库文件
+	lab1_bp := "lab1_bp"
+	// 如果文件存在，就删除
+	if _, err := os.Stat(lab1_bp); err == nil {
+		os.Remove(lab1_bp)
+	}
+	// 新建heapfile，bufferpool为100
+	hpfile, err := NewHeapFile(lab1_bp, &td, NewBufferPool(100))
+	if err != nil {
+		return 0, err
+	}
+	// 打开csv文件，从csv文件中读取数据，写入heapfile
+	file, err := os.Open(fileName)
+	if err != nil {
+		return 0, err
+	}
+	err = hpfile.LoadFromCSV(file, true, ",", false)
+	if err != nil {
+		return 0, err
+	}
+	// 遍历heapfile，计算sum
+	iter, err := hpfile.Iterator(NewTID())
+	if err != nil {
+		return 0, err
+	}
+	sum := 0
+	for {
+		tup, err := iter()
+		if err != nil {
+			return 0, err
+		}
+		if tup == nil {
+			break
+		}
+		// 遍历tuple，找到sumField
+		for i, field := range td.Fields {
+			if field.Fname == sumField {
+				sum += int(tup.Fields[i].(IntField).Value)
+			}
+		}
+	}
+	// 返回sum
+	return sum, nil // replace me
 }
