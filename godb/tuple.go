@@ -174,20 +174,28 @@ func (t *Tuple) writeTo(b *bytes.Buffer) error {
 	// TODO: some code goes here
 	// 遍历 t.Fields，将每个字段的值写入 b 中
 	for i, field := range t.Fields {
-		// 初始化一个长度为 StringLength 的字节数组
-		data := make([]byte, StringLength)
 		// 判断数据类型
 		if t.Desc.Fields[i].Ftype == IntType {
-			// 若为 IntType，则将 int64 转换为 uint64，再将 uint64 转换为字节数组
-			binary.LittleEndian.PutUint64(data, uint64(field.(IntField).Value))
+			// 若为 IntType，则将 int64 直接写入
+			err := binary.Write(b, binary.LittleEndian, field.(IntField).Value)
+			if err != nil {
+				return err
+			}
 		} else if t.Desc.Fields[i].Ftype == StringType {
+			// 初始化一个长度为 StringLength 的字节数组
+			data := make([]byte, StringLength)
 			// 若为 StringType，则将 string 转换为字节数组
 			copy(data, []byte(field.(StringField).Value))
-		}
 		// 将 data 写入 b 中
 		err := binary.Write(b, binary.LittleEndian, data)
 		if err != nil {
 			return err
+			}
+		} else {
+			return GoDBError{
+				code:      0,
+				errString: "unkonwn type err",
+			}
 		}
 	}
 	return nil //replace me
@@ -208,34 +216,37 @@ func (t *Tuple) writeTo(b *bytes.Buffer) error {
 // tuple.
 func readTupleFrom(b *bytes.Buffer, desc *TupleDesc) (*Tuple, error) {
 	// TODO: some code goes here
-	length := len(desc.Fields)
 	// fields 存储每个字段的值
-	fields := make([]DBValue, length)
-	// 构造一个二维数组，用于存储读取到的byte数据，每个元素的长度为 StringLength
-	var data = make([][StringLength]byte, length)
-	// 从 b 中读取数据
-	err := binary.Read(b, binary.LittleEndian, data)
-	if err != nil {
-		return nil, err
-	}
+	fields := make([]DBValue, len(desc.Fields))
 	// 遍历 desc.Fields，将每个字段的值存储到 fields 中
 	for i, v := range desc.Fields {
 		// 判断数据类型
 		if v.Ftype == IntType {
-			// 若为 IntType，则将字节数组转换为 uint64，再将 uint64 转换为 int64
+			// 若未 IntType，则读取 int64
 			var field_value IntField
-			field_value.Value = int64(binary.LittleEndian.Uint64(data[i][:]))
+			err := binary.Read(b, binary.LittleEndian, &field_value.Value)
 			if err != nil {
 				return nil, err
 			}
 			fields[i] = field_value
 		} else if v.Ftype == StringType {
-			// 若为 StringType，则将字节数组转换为 string
+			// 若为 StringType，则读取 StringLength 长度的字节数组，再将字节数组转换为 string
 			var field_value StringField
+			stringBytes := make([]byte, StringLength)
+			err := binary.Read(b, binary.LittleEndian, &stringBytes)
+			if err != nil {
+				return nil, err
+			}
 			// 去除字符串中的空字符
-			c := bytes.Trim(data[i][:], "\x00")
+			c := bytes.Trim(stringBytes, "\x00")
 			field_value.Value = string(c)
 			fields[i] = field_value
+		} else {
+			// 若为 UnknownType，则返回错误
+			return nil, GoDBError{
+				code:      0,
+				errString: "unkonwn type err",
+			}
 		}
 	}
 	// 返回一个 Tuple 对象
