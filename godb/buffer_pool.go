@@ -15,18 +15,29 @@ const (
 
 type BufferPool struct {
 	// TODO: some code goes here
+	pages    map[[16]byte]*Page // 用于存储页面, key为pageKey(FileName, PageNo)
+	numPages int                // BufferPool的容量
 }
 
 // Create a new BufferPool with the specified number of pages
 func NewBufferPool(numPages int) *BufferPool {
 	// TODO: some code goes here
-	return &BufferPool{}
+	pages := make(map[[16]byte]*Page, numPages)
+	return &BufferPool{pages: pages, numPages: numPages}
 }
 
 // Testing method -- iterate through all pages in the buffer pool
 // and flush them using [DBFile.flushPage]. Does not need to be thread/transaction safe
 func (bp *BufferPool) FlushAllPages() {
 	// TODO: some code goes here
+	// 遍历所有页面，将页面写入磁盘
+	for _, page := range bp.pages {
+		// 如果页面不是空的，就写入磁盘
+		if page != nil {
+			file := (*page).getFile()
+			(*file).flushPage(page)
+		}
+	}
 }
 
 // Abort the transaction, releasing locks. Because GoDB is FORCE/NO STEAL, none
@@ -63,5 +74,38 @@ func (bp *BufferPool) BeginTransaction(tid TransactionID) error {
 // of pages in the BufferPool in a map keyed by the [DBFile.pageKey].
 func (bp *BufferPool) GetPage(file DBFile, pageNo int, tid TransactionID, perm RWPerm) (*Page, error) {
 	// TODO: some code goes here
-	return nil, nil
+	hpfile := file.(*HeapFile)
+	key := hpfile.pageKey(pageNo).([16]byte)
+	if bp.pages[key] != nil {
+		return bp.pages[key], nil
+	} else {
+		// 判断buffer pool是否已满
+		if len(bp.pages) >= bp.numPages {
+			// 若已满，遍历所有页面，找到一个不是脏的页面，驱逐
+			flag := false
+			for _, page := range bp.pages {
+				// 如果页面不是脏的，就可以驱逐
+				if page != nil && !(*page).isDirty() {
+					hpfile.flushPage(page)
+					delete(bp.pages, hpfile.pageKey(pageNo).([16]byte))
+					flag = true
+					break
+				}
+			}
+			// 如果所有页面都是脏的，就报错
+			if !flag {
+				return nil, GoDBError{
+					code:      PageFullError,
+					errString: "buffer pool is full",
+				}
+			}
+		}
+		// 读取页面
+		page, err := hpfile.readPage(pageNo)
+		if err != nil {
+			return nil, err
+		}
+		bp.pages[key] = page
+		return page, nil
+	}
 }
