@@ -295,6 +295,21 @@ func (t1 *Tuple) equals(t2 *Tuple) bool {
 // Merge two tuples together, producing a new tuple with the fields of t2 appended to t1.
 func joinTuples(t1 *Tuple, t2 *Tuple) *Tuple {
 	// TODO: some code goes here
+	// 检验是否为空
+	if t1 == nil {
+		t1 = &Tuple{
+			Desc:   TupleDesc{},
+			Fields: make([]DBValue, 0),
+			Rid:    nil,
+		}
+	}
+	if t2 == nil {
+		t2 = &Tuple{
+			Desc:   TupleDesc{},
+			Fields: make([]DBValue, 0),
+			Rid:    nil,
+		}
+	}
 	// 合并 t1 和 t2 的 TupleDesc
 	desc := t1.Desc.merge(&t2.Desc)
 	// 合并 t1 和 t2 的 Fields
