@@ -41,7 +41,20 @@ func NewAggregator(emptyAggState []AggState, child Operator) *Aggregator {
 // HINT: use the merge function you implemented for TupleDesc in lab1 to merge the two TupleDescs
 func (a *Aggregator) Descriptor() *TupleDesc {
 	// TODO: some code goes here
-	return nil // TODO change me
+	// 构造fields
+	fields := make([]FieldType, 0)
+	// 若有分组依据，则将分组依据加入fields
+	if a.groupByFields != nil {
+		for _, fld := range a.groupByFields {
+			fields = append(fields, fld.GetExprType())
+		}
+	}
+	// 然后将聚合状态的fields加入fields
+	td := TupleDesc{fields}
+	for _, aggState := range a.newAggState {
+		td.merge(aggState.GetTupleDesc())
+	}
+	return &td // TODO change me
 }
 
 // Aggregate operator implementation: This function should iterate over the results of
@@ -133,7 +146,20 @@ func (a *Aggregator) Iterator(tid TransactionID) (func() (*Tuple, error), error)
 // If there is any error during expression evaluation, return the error.
 func extractGroupByKeyTuple(a *Aggregator, t *Tuple) (*Tuple, error) {
 	// TODO: some code goes here
-	return nil, nil // TODO change me
+	// 构造指示t所属分组的keygenTup
+	keygenTup := &Tuple{TupleDesc{[]FieldType{}}, []DBValue{}, nil}
+	// 遍历分组依据，将分组依据加入keygenTup
+	for _, expr := range a.groupByFields {
+		// 计算出该分组依据对应的值
+		v, err := expr.EvalExpr(t)
+		if err != nil {
+			return nil, err
+		}
+		// 将该分组依据加入keygenTup
+		keygenTup = joinTuples(keygenTup, &Tuple{TupleDesc{[]FieldType{expr.GetExprType()}}, []DBValue{v}, nil})
+	}
+	// 返回keygenTup
+	return keygenTup, nil // TODO change me
 }
 
 // Given a tuple t from child and (a pointer to) the array of partially computed aggregates
@@ -143,6 +169,19 @@ func extractGroupByKeyTuple(a *Aggregator, t *Tuple) (*Tuple, error) {
 // element of the a.newAggState field and add the new aggState to grpAggState.
 func addTupleToGrpAggState(a *Aggregator, t *Tuple, grpAggState *[]AggState) {
 	// TODO: some code goes here
+	// 遍历聚合状态
+	for i, aggState := range *grpAggState {
+		// 若聚合状态为空，则创建新的聚合状态
+		if aggState == nil {
+			copy := a.newAggState[i].Copy()
+			if copy == nil {
+				return
+			}
+			(*grpAggState)[i] = copy
+		}
+		// 将元组加入聚合状态中
+		(*grpAggState)[i].AddTuple(t)
+	}
 }
 
 // Given that all child tuples have been added, return an iterator that iterates
@@ -152,9 +191,29 @@ func addTupleToGrpAggState(a *Aggregator, t *Tuple, grpAggState *[]AggState) {
 // Then, you should get the groupByTuple and merge it with each of the AggState tuples using the
 // joinTuples function in tuple.go you wrote in lab 1.
 func getFinalizedTuplesIterator(a *Aggregator, groupByList []*Tuple, aggState map[any]*[]AggState) func() (*Tuple, error) {
+	// 当前组序号
 	curGbyTuple := 0 // "captured" counter to track the current tuple we are iterating over
 	return func() (*Tuple, error) {
 		// TODO: some code goes here
-		return nil, nil // TODO change me
+		// 若最后一组，则返回
+		if curGbyTuple >= len(groupByList) {
+			return nil, nil
+		}
+		// 构造结果元组
+		var retTuple *Tuple = &Tuple{TupleDesc{[]FieldType{}}, []DBValue{}, nil}
+		// 首先将分组依据加入结果元组
+		retTuple = joinTuples(retTuple, groupByList[curGbyTuple])
+		// 获取该组的Key值
+		key := groupByList[curGbyTuple].tupleKey()
+		// 获取该组的聚合状态列表
+		grpAggState := *aggState[key]
+		// 遍历聚合状态列表，将结果添加到结果元组中
+		for i := 0; i < len(a.newAggState); i++ {
+			newTup := grpAggState[i].Finalize()
+			retTuple = joinTuples(retTuple, newTup)
+		}
+		// 组ID++
+		curGbyTuple++
+		return retTuple, nil // TODO change me
 	}
 }
