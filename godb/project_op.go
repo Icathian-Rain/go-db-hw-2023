@@ -6,6 +6,8 @@ type Project struct {
 	child        Operator
 	//add additional fields here
 	// TODO: some code goes here
+	distinct bool       // 是否去重
+	desc     *TupleDesc // 描述符
 }
 
 // Project constructor -- should save the list of selected field, child, and the child op.
@@ -15,7 +17,19 @@ type Project struct {
 // only distinct results, and child is the child operator.
 func NewProjectOp(selectFields []Expr, outputNames []string, distinct bool, child Operator) (Operator, error) {
 	// TODO: some code goes here
-	return nil, nil
+	// 若selectFields和outputNames长度不一致，返回错误
+	if len(selectFields) != len(outputNames) {
+		return nil, GoDBError{ParseError, "selectFields and outputNames must be same length"}
+	}
+	// 构建TupleDesc
+	fields := make([]FieldType, len(selectFields))
+	// 遍历selectFields，获取每个field的类型
+	// 将field的name修改为outputNames中对应的name
+	for i, field := range selectFields {
+		fields[i] = field.GetExprType()
+		fields[i].Fname = outputNames[i]
+	}
+	return &Project{selectFields, outputNames, child, distinct, &TupleDesc{fields}}, nil
 }
 
 // Return a TupleDescriptor for this projection. The returned descriptor should contain
@@ -24,7 +38,7 @@ func NewProjectOp(selectFields []Expr, outputNames []string, distinct bool, chil
 // HINT: you can use expr.GetExprType() to get the field type
 func (p *Project) Descriptor() *TupleDesc {
 	// TODO: some code goes here
-	return nil
+	return p.desc
 
 }
 
@@ -36,5 +50,46 @@ func (p *Project) Descriptor() *TupleDesc {
 // optional as specified in the lab 2 assignment.
 func (p *Project) Iterator(tid TransactionID) (func() (*Tuple, error), error) {
 	// TODO: some code goes here
-	return nil, nil
+	// 获取child的迭代器
+	iter, err := p.child.Iterator(tid)
+	if err != nil {
+		return nil, nil
+	}
+	var set = make(map[any]bool)
+	return func() (*Tuple, error) {
+		// 遍历child的迭代器
+		for {
+			tuple, err := iter()
+			if err != nil {
+				return nil, err
+			}
+			// 若tuple为nil，说明已经遍历完毕
+			if tuple == nil {
+				break
+			}
+			// 提取出fileds
+			fields := make([]DBValue, len(p.selectFields))
+			for i, field := range p.selectFields {
+				fields[i], err = field.EvalExpr(tuple)
+				if err != nil {
+					return nil, nil
+				}
+			}
+			// 构造返回tuple
+			retTuple := &Tuple{
+				Desc:   *p.desc,
+				Fields: fields,
+			}
+			key := retTuple.tupleKey()
+			// 查重
+			_, ok := set[key]
+			// 若不需要去重或者没有重复，返回tuple
+			if !p.distinct || !ok {
+				set[key] = true
+				return retTuple, nil
+			}
+		}
+		return nil, nil
+	}, nil
+
 }
