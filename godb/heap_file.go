@@ -180,36 +180,56 @@ func (f *HeapFile) readPage(pageNo int) (*Page, error) {
 // worry about concurrent transactions modifying the Page or HeapFile.  We will
 // add support for concurrent modifications in lab 3.
 func (f *HeapFile) insertTuple(t *Tuple, tid TransactionID) error {
+	if !f.bufPool.HasTransaction(tid) {
+		return GoDBError{code: 0, errString: "transaction not found"}
+	}
 	// TODO: some code goes here
 	// 从现有的page中寻找空slot
 	for i := 0; i < f.NumPages(); i++ {
 		// 获取page
 		page, err := f.bufPool.GetPage(f, i, tid, ReadPerm)
+		// 若获取失败，说明该页面被锁住，跳过
 		if err != nil {
-			return err
+			continue
 		}
 		hp := (*page).(*heapPage)
 		// 如果有空slot，插入tuple
 		if hp.getNumEmptySlots() > 0 {
 			// 插入tuple
-			_, err := (*page).(*heapPage).insertTuple(t)
+			page, err := f.bufPool.GetPage(f, i, tid, WritePerm)
+			if err != nil {
+				continue
+			}
+			_, err = (*page).(*heapPage).insertTuple(t)
 			if err != nil {
 				return err
 			}
+			// set dirty
+			(*page).setDirty(true)
 			return nil
 		}
+		f.bufPool.unlockPage(f.pageKey(i).(uint64), tid, ReadPerm)
 	}
 	// no empty slots found, create new page
-	hp := newHeapPage(f.td, f.NumPages(), f)
-	// add tuple to new page
-	_, err := hp.insertTuple(t)
-	if err != nil {
-		return err
-	}
+	pageNo := f.NumPages()
+	hp := newHeapPage(f.td, pageNo, f)
+	// 刷新page
 	// write page to end of file
 	var page Page = hp
 	// 刷新page
 	f.flushPage(&page)
+	new_page, err := f.bufPool.GetPage(f, pageNo, tid, WritePerm)
+	if err != nil {
+		return err
+	}
+	// add tuple to new page
+	_, err = (*new_page).(*heapPage).insertTuple(t)
+	if err != nil {
+		return err
+	}
+	// set dirty
+	(*new_page).setDirty(true)
+
 	return nil //replace me
 }
 
@@ -222,10 +242,14 @@ func (f *HeapFile) insertTuple(t *Tuple, tid TransactionID) error {
 // heap page and slot within the page that the tuple came from.
 func (f *HeapFile) deleteTuple(t *Tuple, tid TransactionID) error {
 	// TODO: some code goes here
+	if !f.bufPool.HasTransaction(tid) {
+		return GoDBError{code: 0, errString: "transaction not found"}
+	}
 	// 获取page
 	pageID := t.Rid.(RecordID).PageNo
-	page, err := f.bufPool.GetPage(f, int(pageID), tid, ReadPerm)
+	page, err := f.bufPool.GetPage(f, int(pageID), tid, WritePerm)
 	if err != nil {
+		f.bufPool.AbortTransaction(tid)
 		return err
 	}
 	// 删除tuple
@@ -233,6 +257,8 @@ func (f *HeapFile) deleteTuple(t *Tuple, tid TransactionID) error {
 	if err != nil {
 		return err
 	}
+	// set dirty
+	(*page).setDirty(true)
 	return nil //replace me
 }
 
@@ -279,6 +305,9 @@ func (f *HeapFile) Descriptor() *TupleDesc {
 // You should esnure that Tuples returned by this method have their Rid object
 // set appropriate so that [deleteTuple] will work (see additional comments there).
 func (f *HeapFile) Iterator(tid TransactionID) (func() (*Tuple, error), error) {
+	if !f.bufPool.HasTransaction(tid) {
+		return nil, GoDBError{code: 0, errString: "transaction not found"}
+	}
 	// 迭代page
 	pageNo := 0
 	// page迭代tuple
@@ -288,8 +317,9 @@ func (f *HeapFile) Iterator(tid TransactionID) (func() (*Tuple, error), error) {
 		// 遍历page
 		for pageNo < f.NumPages() {
 			// 获取page
-			page, err := f.bufPool.GetPage(f, pageNo, tid, ReadPerm)
+			page, err := f.bufPool.GetPage(f, pageNo, tid, WritePerm)
 			if err != nil {
+				f.bufPool.AbortTransaction(tid)
 				return nil, err
 			}
 			hp := (*page).(*heapPage)
