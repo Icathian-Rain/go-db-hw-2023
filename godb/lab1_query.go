@@ -15,7 +15,7 @@ import "os"
 func computeFieldSum(fileName string, td TupleDesc, sumField string) (int, error) {
 	// TODO: some code goes here
 	// 打开数据库文件
-	lab1_bp := "lab1_bp"
+	lab1_bp := "lab1_bp.dat"
 	// 如果文件存在，就删除
 	if _, err := os.Stat(lab1_bp); err == nil {
 		os.Remove(lab1_bp)
@@ -34,8 +34,11 @@ func computeFieldSum(fileName string, td TupleDesc, sumField string) (int, error
 	if err != nil {
 		return 0, err
 	}
+	tid := NewTID()
+	// 开启事务
+	hpfile.bufPool.BeginTransaction(tid)
 	// 遍历heapfile，计算sum
-	iter, err := hpfile.Iterator(NewTID())
+	iter, err := hpfile.Iterator(tid)
 	if err != nil {
 		return 0, err
 	}
@@ -56,5 +59,6 @@ func computeFieldSum(fileName string, td TupleDesc, sumField string) (int, error
 		}
 	}
 	// 返回sum
+	hpfile.bufPool.CommitTransaction(tid)
 	return sum, nil // replace me
 }
